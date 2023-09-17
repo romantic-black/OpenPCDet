@@ -4,22 +4,24 @@ from ...ops.iou3d_nms import iou3d_nms_utils
 
 
 def class_agnostic_nms(box_scores, box_preds, nms_config, score_thresh=None):
-    src_box_scores = box_scores
-    if score_thresh is not None:
+    src_box_scores = box_scores     # [70400]
+    if score_thresh is not None:    # False
         scores_mask = (box_scores >= score_thresh)
         box_scores = box_scores[scores_mask]
         box_preds = box_preds[scores_mask]
 
     selected = []
-    if box_scores.shape[0] > 0:
+    if box_scores.shape[0] > 0:     # True
+        # 选择分数最高的前 9000 个 bbox
         box_scores_nms, indices = torch.topk(box_scores, k=min(nms_config.NMS_PRE_MAXSIZE, box_scores.shape[0]))
         boxes_for_nms = box_preds[indices]
+        # 依据 bbox 和分数，以及0.8的阈值，以及其他参数进行 NMS
         keep_idx, selected_scores = getattr(iou3d_nms_utils, nms_config.NMS_TYPE)(
                 boxes_for_nms[:, 0:7], box_scores_nms, nms_config.NMS_THRESH, **nms_config
         )
-        selected = indices[keep_idx[:nms_config.NMS_POST_MAXSIZE]]
+        selected = indices[keep_idx[:nms_config.NMS_POST_MAXSIZE]]  # 选择512个
 
-    if score_thresh is not None:
+    if score_thresh is not None:    # True
         original_idxs = scores_mask.nonzero().view(-1)
         selected = original_idxs[selected]
     return selected, src_box_scores[selected]

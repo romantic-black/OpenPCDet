@@ -17,18 +17,22 @@ class AnchorHeadTemplate(nn.Module):
         self.predict_boxes_when_training = predict_boxes_when_training
         self.use_multihead = self.model_cfg.get('USE_MULTIHEAD', False)
 
+        # box coder: 用于生成 bbox 与 锚框的相对关系
         anchor_target_cfg = self.model_cfg.TARGET_ASSIGNER_CONFIG
         self.box_coder = getattr(box_coder_utils, anchor_target_cfg.BOX_CODER)(
             num_dir_bins=anchor_target_cfg.get('NUM_DIR_BINS', 6),
             **anchor_target_cfg.get('BOX_CODER_CONFIG', {})
         )
-
+        # 生成全部锚框（每个检测类别生成一个）
         anchor_generator_cfg = self.model_cfg.ANCHOR_GENERATOR_CONFIG
+        # anchors: [[1, 200, 176, 1, 2, 7]] # [x, y, z, num_size, num_rot, 7]
+        # num_anchors_per_location: [2]
         anchors, self.num_anchors_per_location = self.generate_anchors(
             anchor_generator_cfg, grid_size=grid_size, point_cloud_range=point_cloud_range,
             anchor_ndim=self.box_coder.code_size
         )
         self.anchors = [x.cuda() for x in anchors]
+
         self.target_assigner = self.get_target_assigner(anchor_target_cfg)
 
         self.forward_ret_dict = {}
@@ -40,10 +44,11 @@ class AnchorHeadTemplate(nn.Module):
             anchor_range=point_cloud_range,
             anchor_generator_config=anchor_generator_cfg
         )
+        # 这里其实定好了，说明 bev 特征图的大小和 anchor 的大小是一致的，因此二者天然是一一对应
         feature_map_size = [grid_size[:2] // config['feature_map_stride'] for config in anchor_generator_cfg]
         anchors_list, num_anchors_per_location_list = anchor_generator.generate_anchors(feature_map_size)
 
-        if anchor_ndim != 7:
+        if anchor_ndim != 7:    # False
             for idx, anchors in enumerate(anchors_list):
                 pad_zeros = anchors.new_zeros([*anchors.shape[0:-1], anchor_ndim - 7])
                 new_anchors = torch.cat((anchors, pad_zeros), dim=-1)
@@ -52,14 +57,14 @@ class AnchorHeadTemplate(nn.Module):
         return anchors_list, num_anchors_per_location_list
 
     def get_target_assigner(self, anchor_target_cfg):
-        if anchor_target_cfg.NAME == 'ATSS':
+        if anchor_target_cfg.NAME == 'ATSS':    # False
             target_assigner = ATSSTargetAssigner(
                 topk=anchor_target_cfg.TOPK,
                 box_coder=self.box_coder,
                 use_multihead=self.use_multihead,
                 match_height=anchor_target_cfg.MATCH_HEIGHT
             )
-        elif anchor_target_cfg.NAME == 'AxisAlignedTargetAssigner':
+        elif anchor_target_cfg.NAME == 'AxisAlignedTargetAssigner':     # False
             target_assigner = AxisAlignedTargetAssigner(
                 model_cfg=self.model_cfg,
                 class_names=self.class_names,
@@ -72,17 +77,17 @@ class AnchorHeadTemplate(nn.Module):
 
     def build_losses(self, losses_cfg):
         self.add_module(
-            'cls_loss_func',
+            'cls_loss_func',    # 分类损失
             loss_utils.SigmoidFocalClassificationLoss(alpha=0.25, gamma=2.0)
         )
         reg_loss_name = 'WeightedSmoothL1Loss' if losses_cfg.get('REG_LOSS_TYPE', None) is None \
             else losses_cfg.REG_LOSS_TYPE
         self.add_module(
-            'reg_loss_func',
+            'reg_loss_func',    # 回归损失
             getattr(loss_utils, reg_loss_name)(code_weights=losses_cfg.LOSS_WEIGHTS['code_weights'])
         )
         self.add_module(
-            'dir_loss_func',
+            'dir_loss_func',    # 方向损失
             loss_utils.WeightedCrossEntropyLoss()
         )
 
@@ -99,36 +104,46 @@ class AnchorHeadTemplate(nn.Module):
         return targets_dict
 
     def get_cls_layer_loss(self):
-        cls_preds = self.forward_ret_dict['cls_preds']
-        box_cls_labels = self.forward_ret_dict['box_cls_labels']
+        cls_preds = self.forward_ret_dict['cls_preds']              # [4, 200, 176, 2], 置信度
+        box_cls_labels = self.forward_ret_dict['box_cls_labels']    # [4, 70400], 1 0 -1
         batch_size = int(cls_preds.shape[0])
-        cared = box_cls_labels >= 0  # [N, num_anchors]
-        positives = box_cls_labels > 0
-        negatives = box_cls_labels == 0
-        negative_cls_weights = negatives * 1.0
+        cared = box_cls_labels >= 0         # [N, num_anchors], 中性样本是 -1
+        positives = box_cls_labels > 0      # 正样本
+        negatives = box_cls_labels == 0     # 负样本
+        negative_cls_weights = negatives * 1.0  # cls: 正负样本权重都为1, 中性为0
         cls_weights = (negative_cls_weights + 1.0 * positives).float()
-        reg_weights = positives.float()
-        if self.num_class == 1:
+        reg_weights = positives.float()     # reg: 正样本权重为1
+        if self.num_class == 1:     # True
             # class agnostic
             box_cls_labels[positives] = 1
 
-        pos_normalizer = positives.sum(1, keepdim=True).float()
-        reg_weights /= torch.clamp(pos_normalizer, min=1.0)
+        pos_normalizer = positives.sum(1, keepdim=True).float()     # [4, 1]
+        reg_weights /= torch.clamp(pos_normalizer, min=1.0)         # clamp 最小值为1
         cls_weights /= torch.clamp(pos_normalizer, min=1.0)
-        cls_targets = box_cls_labels * cared.type_as(box_cls_labels)
-        cls_targets = cls_targets.unsqueeze(dim=-1)
+        cls_targets = box_cls_labels * cared.type_as(box_cls_labels)    # 去除中性样本
+        cls_targets = cls_targets.unsqueeze(dim=-1)     # 谜之操作
 
         cls_targets = cls_targets.squeeze(dim=-1)
-        one_hot_targets = torch.zeros(
+        one_hot_targets = torch.zeros(      # [4, 70400, 2]
             *list(cls_targets.shape), self.num_class + 1, dtype=cls_preds.dtype, device=cls_targets.device
         )
+        """
+        对索引也有新的理解，即 [a,b,c,...]
+        一般有两种情况，1: abc都是等长的一维数组，此时abc就是坐标，2: a是掩码
+        但实际上，abc可以是任意维度的张量，此时会应用广播机制，结果比较复杂
+        scatter_(dim, index, src), 用于给矩阵赋值
+        相比 = 操作，scatter_具有如下优势: 
+        1): 可以批量设置多个值，无需循环
+        2): 原地操作，直接改变输入的 tensor
+        3): 在复杂情况下，= 操作需要改变张量形状才能赋值，但 scatter_ 不需要
+        """
         one_hot_targets.scatter_(-1, cls_targets.unsqueeze(dim=-1).long(), 1.0)
         cls_preds = cls_preds.view(batch_size, -1, self.num_class)
-        one_hot_targets = one_hot_targets[..., 1:]
+        one_hot_targets = one_hot_targets[..., 1:]      # [4, 70400, 1] 去除 bg
         cls_loss_src = self.cls_loss_func(cls_preds, one_hot_targets, weights=cls_weights)  # [N, M]
         cls_loss = cls_loss_src.sum() / batch_size
 
-        cls_loss = cls_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']
+        cls_loss = cls_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']     # loss * 1.0
         tb_dict = {
             'rpn_loss_cls': cls_loss.item()
         }
@@ -160,19 +175,19 @@ class AnchorHeadTemplate(nn.Module):
         return dir_cls_targets
 
     def get_box_reg_layer_loss(self):
-        box_preds = self.forward_ret_dict['box_preds']
-        box_dir_cls_preds = self.forward_ret_dict.get('dir_cls_preds', None)
-        box_reg_targets = self.forward_ret_dict['box_reg_targets']
-        box_cls_labels = self.forward_ret_dict['box_cls_labels']
+        box_preds = self.forward_ret_dict['box_preds']                  # [4, 200, 176, 14]
+        box_dir_cls_preds = self.forward_ret_dict.get('dir_cls_preds', None)    # [4, 200, 176, 4]
+        box_reg_targets = self.forward_ret_dict['box_reg_targets']      # [4, 70400, 7]
+        box_cls_labels = self.forward_ret_dict['box_cls_labels']        # [4, 70400]
         batch_size = int(box_preds.shape[0])
 
-        positives = box_cls_labels > 0
-        reg_weights = positives.float()
-        pos_normalizer = positives.sum(1, keepdim=True).float()
+        positives = box_cls_labels > 0          # [4, 70400]
+        reg_weights = positives.float()         # [4, 70400]
+        pos_normalizer = positives.sum(1, keepdim=True).float()     # [4, 1]
         reg_weights /= torch.clamp(pos_normalizer, min=1.0)
 
-        if isinstance(self.anchors, list):
-            if self.use_multihead:
+        if isinstance(self.anchors, list):      # True
+            if self.use_multihead:              # False
                 anchors = torch.cat(
                     [anchor.permute(3, 4, 0, 1, 2, 5).contiguous().view(-1, anchor.shape[-1]) for anchor in
                      self.anchors], dim=0)
@@ -181,7 +196,7 @@ class AnchorHeadTemplate(nn.Module):
         else:
             anchors = self.anchors
         anchors = anchors.view(1, -1, anchors.shape[-1]).repeat(batch_size, 1, 1)
-        box_preds = box_preds.view(batch_size, -1,
+        box_preds = box_preds.view(batch_size, -1,      # # [4, 70400, 7]
                                    box_preds.shape[-1] // self.num_anchors_per_location if not self.use_multihead else
                                    box_preds.shape[-1])
         # sin(a - b) = sinacosb-cosasinb
@@ -189,13 +204,13 @@ class AnchorHeadTemplate(nn.Module):
         loc_loss_src = self.reg_loss_func(box_preds_sin, reg_targets_sin, weights=reg_weights)  # [N, M]
         loc_loss = loc_loss_src.sum() / batch_size
 
-        loc_loss = loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
+        loc_loss = loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']     # loss * 2
         box_loss = loc_loss
         tb_dict = {
             'rpn_loss_loc': loc_loss.item()
         }
-
-        if box_dir_cls_preds is not None:
+        # 方向层损失
+        if box_dir_cls_preds is not None:       # True
             dir_targets = self.get_direction_target(
                 anchors, box_reg_targets,
                 dir_offset=self.model_cfg.DIR_OFFSET,
@@ -207,7 +222,7 @@ class AnchorHeadTemplate(nn.Module):
             weights /= torch.clamp(weights.sum(-1, keepdim=True), min=1.0)
             dir_loss = self.dir_loss_func(dir_logits, dir_targets, weights=weights)
             dir_loss = dir_loss.sum() / batch_size
-            dir_loss = dir_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['dir_weight']
+            dir_loss = dir_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['dir_weight']     # loss * 0.2
             box_loss += dir_loss
             tb_dict['rpn_loss_dir'] = dir_loss.item()
 
@@ -224,6 +239,7 @@ class AnchorHeadTemplate(nn.Module):
 
     def generate_predicted_boxes(self, batch_size, cls_preds, box_preds, dir_cls_preds=None):
         """
+        输入相对锚框的预测值，返回真正的预测值
         Args:
             batch_size:
             cls_preds: (N, H, W, C1)
@@ -235,12 +251,12 @@ class AnchorHeadTemplate(nn.Module):
             batch_box_preds: (B, num_boxes, 7+C)
 
         """
-        if isinstance(self.anchors, list):
-            if self.use_multihead:
+        if isinstance(self.anchors, list):      # True
+            if self.use_multihead:              # False
                 anchors = torch.cat([anchor.permute(3, 4, 0, 1, 2, 5).contiguous().view(-1, anchor.shape[-1])
                                      for anchor in self.anchors], dim=0)
             else:
-                anchors = torch.cat(self.anchors, dim=-3)
+                anchors = torch.cat(self.anchors, dim=-3)   # 在尺寸放缩维度拼接
         else:
             anchors = self.anchors
         num_anchors = anchors.view(-1, anchors.shape[-1]).shape[0]
@@ -251,14 +267,14 @@ class AnchorHeadTemplate(nn.Module):
             else torch.cat(box_preds, dim=1).view(batch_size, num_anchors, -1)
         batch_box_preds = self.box_coder.decode_torch(batch_box_preds, batch_anchors)
 
-        if dir_cls_preds is not None:
-            dir_offset = self.model_cfg.DIR_OFFSET
-            dir_limit_offset = self.model_cfg.DIR_LIMIT_OFFSET
+        if dir_cls_preds is not None:   # True
+            dir_offset = self.model_cfg.DIR_OFFSET  # 0.78539
+            dir_limit_offset = self.model_cfg.DIR_LIMIT_OFFSET  # 0.
             dir_cls_preds = dir_cls_preds.view(batch_size, num_anchors, -1) if not isinstance(dir_cls_preds, list) \
                 else torch.cat(dir_cls_preds, dim=1).view(batch_size, num_anchors, -1)
             dir_labels = torch.max(dir_cls_preds, dim=-1)[1]
-
-            period = (2 * np.pi / self.model_cfg.NUM_DIR_BINS)
+            # 计算方向旋转
+            period = (2 * np.pi / self.model_cfg.NUM_DIR_BINS)  # 3.14159
             dir_rot = common_utils.limit_period(
                 batch_box_preds[..., 6] - dir_offset, dir_limit_offset, period
             )

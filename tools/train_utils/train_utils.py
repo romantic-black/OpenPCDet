@@ -12,16 +12,29 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
                     rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False, 
                     use_logger_to_record=False, logger=None, logger_iter_interval=50, cur_epoch=None, 
                     total_epochs=None, ckpt_save_dir=None, ckpt_save_time_interval=300, show_gpu_stat=False, use_amp=False):
-    if total_it_each_epoch == len(train_loader):
+    if total_it_each_epoch == len(train_loader):  # True
         dataloader_iter = iter(train_loader)
 
     ckpt_save_cnt = 1
-    start_it = accumulated_iter % total_it_each_epoch
 
+    # accumulated_iter: 从训练开始到现在累计完成的迭代次数
+    # total_it_each_epoch: 变量表示在一个 epoch 内需要完成的总迭代次数
+    # start_it: 当前 epoch 中应该从哪个迭代次数开始
+    # 专门为恢复训练用的设置，如果从头开始训练，则 start_it = 0
+    start_it = accumulated_iter % total_it_each_epoch   # 0
+
+    # PyTorch中用于自动混合精度（Automatic Mixed Precision，AMP）训练的一个工具
+    # 混合精度训练是一种优化训练过程的技术，它通过混合使用单精度（float32）和半精度（float16）来减少网络训练的内存使用和提高计算速度。
+    # 具体来说，混合精度训练在前向传播和反向传播的过程中使用float16来减少计算量，但在权重更新时使用float32以保持数值稳定性。
+    # 但这种方法有一个问题，就是在反向传播过程中，由于使用了float16，梯度值可能出现数值上溢或下溢的情况。
+    # 为了解决这一问题，GradScaler 会根据一个初始缩放因子（init_scale）来缩放损失值，在进行反向传播之前将其乘以这个缩放因子。
+    # 这样做可以在一定程度上减少或消除梯度的数值问题。
+    # 然后，在权重更新之后，GradScaler 会根据梯度的实际数值自动调整这个缩放因子，以在保持数值稳定性的同时，尽量使用更高的精度
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp, init_scale=optim_cfg.get('LOSS_SCALE_FP16', 2.0**16))
     
-    if rank == 0:
+    if rank == 0:   # True
         pbar = tqdm.tqdm(total=total_it_each_epoch, leave=leave_pbar, desc='train', dynamic_ncols=True)
+        # AverageMeter: 用于存储并更新平均值的类
         data_time = common_utils.AverageMeter()
         batch_time = common_utils.AverageMeter()
         forward_time = common_utils.AverageMeter()
@@ -31,6 +44,8 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
     for cur_it in range(start_it, total_it_each_epoch):
         try:
             batch = next(dataloader_iter)
+        # 当遍历到数据集的末尾时，会从头开始新的遍历，以便持续提供数据给训练循环。
+        # 这在某些训练场景下是非常有用的，特别是当你需要的迭代次数不是数据集大小的整数倍时。
         except StopIteration:
             dataloader_iter = iter(train_loader)
             batch = next(dataloader_iter)
@@ -39,6 +54,7 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
         data_timer = time.time()
         cur_data_time = data_timer - end
 
+        # 更新学习率
         lr_scheduler.step(accumulated_iter, cur_epoch)
 
         try:
@@ -49,11 +65,14 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
         if tb_log is not None:
             tb_log.add_scalar('meta_data/learning_rate', cur_lr, accumulated_iter)
 
+        # 训练模式，启动!!
         model.train()
+        # 清空梯度
         optimizer.zero_grad()
 
+        # 使用自动混合精度（如果启用）进行前向传播
         with torch.cuda.amp.autocast(enabled=use_amp):
-            loss, tb_dict, disp_dict = model_func(model, batch)
+            loss, tb_dict, disp_dict = model_func(model, batch)     # 使用 model_fn_decorator 装饰器
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -155,27 +174,27 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
     accumulated_iter = start_iter
 
     # use for disable data augmentation hook
-    hook_config = cfg.get('HOOK', None) 
+    hook_config = cfg.get('HOOK', None)  # None
     augment_disable_flag = False
 
     with tqdm.trange(start_epoch, total_epochs, desc='epochs', dynamic_ncols=True, leave=(rank == 0)) as tbar:
         total_it_each_epoch = len(train_loader)
-        if merge_all_iters_to_one_epoch:
+        if merge_all_iters_to_one_epoch:  # False
             assert hasattr(train_loader.dataset, 'merge_all_iters_to_one_epoch')
             train_loader.dataset.merge_all_iters_to_one_epoch(merge=True, epochs=total_epochs)
             total_it_each_epoch = len(train_loader) // max(total_epochs, 1)
 
         dataloader_iter = iter(train_loader)
         for cur_epoch in tbar:
-            if train_sampler is not None:
+            if train_sampler is not None:   # False
                 train_sampler.set_epoch(cur_epoch)
 
             # train one epoch
-            if lr_warmup_scheduler is not None and cur_epoch < optim_cfg.WARMUP_EPOCH:
+            if lr_warmup_scheduler is not None and cur_epoch < optim_cfg.WARMUP_EPOCH:  # False
                 cur_scheduler = lr_warmup_scheduler
             else:
                 cur_scheduler = lr_scheduler
-            
+            # False
             augment_disable_flag = disable_augmentation_hook(hook_config, dataloader_iter, total_epochs, cur_epoch, cfg, augment_disable_flag, logger)
             accumulated_iter = train_one_epoch(
                 model, optimizer, train_loader, model_func,

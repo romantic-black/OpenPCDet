@@ -11,6 +11,13 @@ All Rights Reserved 2019-2020.
 #include <cuda_runtime_api.h>
 #include "ball_query_gpu.h"
 
+/*
+    重复使用了很多次的宏
+    CHECK_CUDA: 用于检查张量是否为CUDA张量
+    CHECK_CONTIGUOUS: 用于检查张量是否为连续的（contiguous）
+    CHECK_INPUT: 二者之和
+*/
+
 #define CHECK_CUDA(x) do { \
   if (!x.type().is_cuda()) { \
     fprintf(stderr, "%s must be CUDA tensor at %s:%d\n", #x, __FILE__, __LINE__); \

@@ -1,6 +1,12 @@
 import numpy as np
 import torch
 
+"""
+用于编码和解码目标 bbox
+encode_torch: 输入 bbox 和 锚框，输出相对变化
+decode_torch: 输入相对变化与锚框，输出 bbox
+"""
+
 
 class ResidualCoder(object):
     def __init__(self, code_size=7, encode_angle_by_sincos=False, **kwargs):
@@ -19,27 +25,28 @@ class ResidualCoder(object):
         Returns:
 
         """
+        # 确保物体尺寸大于0
         anchors[:, 3:6] = torch.clamp_min(anchors[:, 3:6], min=1e-5)
         boxes[:, 3:6] = torch.clamp_min(boxes[:, 3:6], min=1e-5)
 
         xa, ya, za, dxa, dya, dza, ra, *cas = torch.split(anchors, 1, dim=-1)
         xg, yg, zg, dxg, dyg, dzg, rg, *cgs = torch.split(boxes, 1, dim=-1)
 
-        diagonal = torch.sqrt(dxa ** 2 + dya ** 2)
+        diagonal = torch.sqrt(dxa ** 2 + dya ** 2)  # XY对角线长度，用于归一化
         xt = (xg - xa) / diagonal
         yt = (yg - ya) / diagonal
         zt = (zg - za) / dza
         dxt = torch.log(dxg / dxa)
         dyt = torch.log(dyg / dya)
         dzt = torch.log(dzg / dza)
-        if self.encode_angle_by_sincos:
+        if self.encode_angle_by_sincos:     # False
             rt_cos = torch.cos(rg) - torch.cos(ra)
             rt_sin = torch.sin(rg) - torch.sin(ra)
             rts = [rt_cos, rt_sin]
         else:
-            rts = [rg - ra]
+            rts = [rg - ra]     # 角度差值
 
-        cts = [g - a for g, a in zip(cgs, cas)]
+        cts = [g - a for g, a in zip(cgs, cas)]     # 这个没有
         return torch.cat([xt, yt, zt, dxt, dyt, dzt, *rts, *cts], dim=-1)
 
     def decode_torch(self, box_encodings, anchors):

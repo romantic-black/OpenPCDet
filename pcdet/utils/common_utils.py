@@ -260,6 +260,7 @@ def scatter_point_inds(indices, point_inds, shape):
 
 
 def generate_voxel2pinds(sparse_tensor):
+    # 输入稀疏特征张量，输出索引（0-N）到稀疏体素的关系表 v2pinds_tensor
     device = sparse_tensor.indices.device
     batch_size = sparse_tensor.batch_size
     spatial_shape = sparse_tensor.spatial_shape

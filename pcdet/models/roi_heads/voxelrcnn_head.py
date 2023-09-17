@@ -16,16 +16,16 @@ class VoxelRCNNHead(RoIHeadTemplate):
 
         c_out = 0
         self.roi_grid_pool_layers = nn.ModuleList()
-        for src_name in self.pool_cfg.FEATURES_SOURCE:
-            mlps = LAYER_cfg[src_name].MLPS
+        for src_name in self.pool_cfg.FEATURES_SOURCE:  # ['x_conv2', 'x_conv3', 'x_conv4']
+            mlps = LAYER_cfg[src_name].MLPS     # 都是 [[32, 32]]
             for k in range(len(mlps)):
-                mlps[k] = [backbone_channels[src_name]] + mlps[k]
+                mlps[k] = [backbone_channels[src_name]] + mlps[k]   # mlps = [[32/64/64,32,32]]
             pool_layer = voxelpool_stack_modules.NeighborVoxelSAModuleMSG(
-                query_ranges=LAYER_cfg[src_name].QUERY_RANGES,
-                nsamples=LAYER_cfg[src_name].NSAMPLE,
-                radii=LAYER_cfg[src_name].POOL_RADIUS,
+                query_ranges=LAYER_cfg[src_name].QUERY_RANGES,  # 都是 [[4,4,4]]
+                nsamples=LAYER_cfg[src_name].NSAMPLE,   # 都是 [16]
+                radii=LAYER_cfg[src_name].POOL_RADIUS,  # [0.4/0.8/1.6] VOXEL_SIZE: [0.05, 0.05, 0.1]
                 mlps=mlps,
-                pool_method=LAYER_cfg[src_name].POOL_METHOD,
+                pool_method=LAYER_cfg[src_name].POOL_METHOD,    # 都是 max_pool
             )
             
             self.roi_grid_pool_layers.append(pool_layer)
@@ -118,15 +118,15 @@ class VoxelRCNNHead(RoIHeadTemplate):
         """
         rois = batch_dict['rois']
         batch_size = batch_dict['batch_size']
-        with_vf_transform = batch_dict.get('with_voxel_feature_transform', False)
-        
+        with_vf_transform = batch_dict.get('with_voxel_feature_transform', False)   # False
+        # roi_grid_xyz: 全局网格点
         roi_grid_xyz, _ = self.get_global_grid_points_of_roi(
-            rois, grid_size=self.pool_cfg.GRID_SIZE
+            rois, grid_size=self.pool_cfg.GRID_SIZE     # grid_size = 6
         )  # (BxN, 6x6x6, 3)
         # roi_grid_xyz: (B, Nx6x6x6, 3)
         roi_grid_xyz = roi_grid_xyz.view(batch_size, -1, 3)  
 
-        # compute the voxel coordinates of grid points
+        # 网格点转为体素坐标，这样就能进行 Voxel Query
         roi_grid_coords_x = (roi_grid_xyz[:, :, 0:1] - self.point_cloud_range[0]) // self.voxel_size[0]
         roi_grid_coords_y = (roi_grid_xyz[:, :, 1:2] - self.point_cloud_range[1]) // self.voxel_size[1]
         roi_grid_coords_z = (roi_grid_xyz[:, :, 2:3] - self.point_cloud_range[2]) // self.voxel_size[2]
@@ -135,49 +135,51 @@ class VoxelRCNNHead(RoIHeadTemplate):
 
         batch_idx = rois.new_zeros(batch_size, roi_grid_coords.shape[1], 1)
         for bs_idx in range(batch_size):
-            batch_idx[bs_idx, :, 0] = bs_idx
+            batch_idx[bs_idx, :, 0] = bs_idx        # 每个网格点所属的 batch
         # roi_grid_coords: (B, Nx6x6x6, 4)
         # roi_grid_coords = torch.cat([batch_idx, roi_grid_coords], dim=-1)
         # roi_grid_coords = roi_grid_coords.int()
         roi_grid_batch_cnt = rois.new_zeros(batch_size).int().fill_(roi_grid_coords.shape[1])
 
         pooled_features_list = []
-        for k, src_name in enumerate(self.pool_cfg.FEATURES_SOURCE):
+        for k, src_name in enumerate(self.pool_cfg.FEATURES_SOURCE):  # ['x_conv2', 'x_conv3', 'x_conv4']
             pool_layer = self.roi_grid_pool_layers[k]
+            # {'x_conv1': 1, 'x_conv2': 2, 'x_conv3': 4, 'x_conv4': 8}
             cur_stride = batch_dict['multi_scale_3d_strides'][src_name]
             cur_sp_tensors = batch_dict['multi_scale_3d_features'][src_name]
 
-            if with_vf_transform:
+            if with_vf_transform:   # False
                 cur_sp_tensors = batch_dict['multi_scale_3d_features_post'][src_name]
-            else:
+            else:   # 稀疏特征张量
                 cur_sp_tensors = batch_dict['multi_scale_3d_features'][src_name]
 
             # compute voxel center xyz and batch_cnt
-            cur_coords = cur_sp_tensors.indices
+            cur_coords = cur_sp_tensors.indices     # 稀疏特征索引
             cur_voxel_xyz = common_utils.get_voxel_centers(
                 cur_coords[:, 1:4],
                 downsample_times=cur_stride,
                 voxel_size=self.voxel_size,
                 point_cloud_range=self.point_cloud_range
             )
+            # 每个batch 有几个有效体素
             cur_voxel_xyz_batch_cnt = cur_voxel_xyz.new_zeros(batch_size).int()
             for bs_idx in range(batch_size):
                 cur_voxel_xyz_batch_cnt[bs_idx] = (cur_coords[:, 0] == bs_idx).sum()
             # get voxel2point tensor
             v2p_ind_tensor = common_utils.generate_voxel2pinds(cur_sp_tensors)
             # compute the grid coordinates in this scale, in [batch_idx, x y z] order
-            cur_roi_grid_coords = roi_grid_coords // cur_stride
+            cur_roi_grid_coords = roi_grid_coords // cur_stride     # 因为降采样，索引整除 2
             cur_roi_grid_coords = torch.cat([batch_idx, cur_roi_grid_coords], dim=-1)
-            cur_roi_grid_coords = cur_roi_grid_coords.int()
+            cur_roi_grid_coords = cur_roi_grid_coords.int()     # [B, N*6*6*6, 4]
             # voxel neighbor aggregation
             pooled_features = pool_layer(
-                xyz=cur_voxel_xyz.contiguous(),
-                xyz_batch_cnt=cur_voxel_xyz_batch_cnt,
-                new_xyz=roi_grid_xyz.contiguous().view(-1, 3),
-                new_xyz_batch_cnt=roi_grid_batch_cnt,
-                new_coords=cur_roi_grid_coords.contiguous().view(-1, 4),
-                features=cur_sp_tensors.features.contiguous(),
-                voxel2point_indices=v2p_ind_tensor
+                xyz=cur_voxel_xyz.contiguous(),         # [112075, 4], 稀疏张量的有效点数量
+                xyz_batch_cnt=cur_voxel_xyz_batch_cnt,  # [B]
+                new_xyz=roi_grid_xyz.contiguous().view(-1, 3),      # [110592, 3]
+                new_xyz_batch_cnt=roi_grid_batch_cnt,   # [B] 元素都是 27648，是RoI（128）的网格点数量（216）
+                new_coords=cur_roi_grid_coords.contiguous().view(-1, 4),    # [110592, 4], 降采样后的网格点坐标
+                features=cur_sp_tensors.features.contiguous(),      # [110592, 32]
+                voxel2point_indices=v2p_ind_tensor      # [4, 21, 800, 704]
             )
 
             pooled_features = pooled_features.view(
@@ -185,31 +187,37 @@ class VoxelRCNNHead(RoIHeadTemplate):
                 pooled_features.shape[-1]
             )  # (BxN, 6x6x6, C)
             pooled_features_list.append(pooled_features)
-        
+        # 合并['x_conv2', 'x_conv3', 'x_conv4']特征
         ms_pooled_features = torch.cat(pooled_features_list, dim=-1)
         
         return ms_pooled_features
 
 
     def get_global_grid_points_of_roi(self, rois, grid_size):
-        rois = rois.view(-1, rois.shape[-1])
-        batch_size_rcnn = rois.shape[0]
+        rois = rois.view(-1, rois.shape[-1])    # [4,128,7] -> [512,7]
+        batch_size_rcnn = rois.shape[0]         # 512
 
+        # 生成局部网格点
         local_roi_grid_points = self.get_dense_grid_points(rois, batch_size_rcnn, grid_size)  # (B, 6x6x6, 3)
+
+        # 网格点转为全局坐标
         global_roi_grid_points = common_utils.rotate_points_along_z(
             local_roi_grid_points.clone(), rois[:, 6]
         ).squeeze(dim=1)
         global_center = rois[:, 0:3].clone()
         global_roi_grid_points += global_center.unsqueeze(dim=1)
+
+        # 局部与全局都返回
         return global_roi_grid_points, local_roi_grid_points
 
     @staticmethod
     def get_dense_grid_points(rois, batch_size_rcnn, grid_size):
-        faked_features = rois.new_ones((grid_size, grid_size, grid_size))
+        faked_features = rois.new_ones((grid_size, grid_size, grid_size))   # [6,6,6]
         dense_idx = faked_features.nonzero()  # (N, 3) [x_idx, y_idx, z_idx]
         dense_idx = dense_idx.repeat(batch_size_rcnn, 1, 1).float()  # (B, 6x6x6, 3)
 
-        local_roi_size = rois.view(batch_size_rcnn, -1)[:, 3:6]
+        local_roi_size = rois.view(batch_size_rcnn, -1)[:, 3:6]     # 获取尺寸
+        # unsqueeze: 添加维度，roi_grid_points: 子网格中心点 [512, 216, 3]
         roi_grid_points = (dense_idx + 0.5) / grid_size * local_roi_size.unsqueeze(dim=1) \
                           - (local_roi_size.unsqueeze(dim=1) / 2)  # (B, 6x6x6, 3)
         return roi_grid_points
@@ -219,7 +227,7 @@ class VoxelRCNNHead(RoIHeadTemplate):
         :param input_data: input dict
         :return:
         """
-
+        # 输入预测框，输出 RoI（NMS 筛选过后的预测框）
         targets_dict = self.proposal_layer(
             batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
         )
@@ -233,8 +241,21 @@ class VoxelRCNNHead(RoIHeadTemplate):
 
         # Box Refinement
         pooled_features = pooled_features.view(pooled_features.size(0), -1)
+        """
+        shared_features = Sequential(
+          (0): Linear(in_features=20736, out_features=256, bias=False)
+          (1): BatchNorm1d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+          (3): Dropout(p=0.3, inplace=False)
+          (4): Linear(in_features=256, out_features=256, bias=False)
+          (5): BatchNorm1d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (6): ReLU(inplace=True)
+        )
+        """
         shared_features = self.shared_fc_layer(pooled_features)
+        # Linear(in_features=256, out_features=1, bias=True)
         rcnn_cls = self.cls_pred_layer(self.cls_fc_layers(shared_features))
+        # Linear(in_features=256, out_features=7, bias=True)
         rcnn_reg = self.reg_pred_layer(self.reg_fc_layers(shared_features))
 
         # grid_size = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
@@ -246,7 +267,7 @@ class VoxelRCNNHead(RoIHeadTemplate):
         # rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)
         # rcnn_reg = self.reg_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, C)
 
-        if not self.training:
+        if not self.training:   # False
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=batch_dict['batch_size'], rois=batch_dict['rois'], cls_preds=rcnn_cls, box_preds=rcnn_reg
             )
@@ -257,6 +278,6 @@ class VoxelRCNNHead(RoIHeadTemplate):
             targets_dict['rcnn_cls'] = rcnn_cls
             targets_dict['rcnn_reg'] = rcnn_reg
 
-            self.forward_ret_dict = targets_dict
+            self.forward_ret_dict = targets_dict    # 基类 get loss 时调用
 
         return batch_dict

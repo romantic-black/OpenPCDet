@@ -76,27 +76,27 @@ __global__ void group_points_kernel_stack(int B, int M, int C, int nsample,
     // :param idx_batch_cnt: (batch_size) [M1 + M2 ...] tensor containing the indicies of features to group with
     // :return:
     //     output: (M1 + M2, C, nsample) tensor
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int sample_idx = index % nsample;
-    int C_idx = (index / nsample) % C;
-    int pt_idx = (index / nsample / C);
+    int index = blockIdx.x * blockDim.x + threadIdx.x;  // M * C * nsample
+    int sample_idx = index % nsample;       // 新邻点索引
+    int C_idx = (index / nsample) % C;      // 通道
+    int pt_idx = (index / nsample / C);     // 质心索引
 
     if (pt_idx >= M || C_idx >= C || sample_idx >= nsample) return;
 
     int bs_idx = 0, pt_cnt = idx_batch_cnt[0];
     for (int k = 1; k < B; k++){
-        if (pt_idx < pt_cnt) break;
+        if (pt_idx < pt_cnt) break;     // 获取质心所属 batch, batch 中最大质心索引
         pt_cnt += idx_batch_cnt[k];
         bs_idx = k;
     }
 
     int features_batch_start_idx = 0;
     for (int k = 0; k < bs_idx; k++) features_batch_start_idx += features_batch_cnt[k];
-    features += features_batch_start_idx * C;
+    features += features_batch_start_idx * C;   // 该 batch 的特征指针
 
-    idx += pt_idx * nsample + sample_idx;
-    int in_idx = idx[0] * C + C_idx;
-    int out_idx = pt_idx * C * nsample + C_idx * nsample + sample_idx;
+    idx += pt_idx * nsample + sample_idx;       // 近邻点的索引指针
+    int in_idx = idx[0] * C + C_idx;            // 根据索引获取近邻点的特征指针
+    int out_idx = pt_idx * C * nsample + C_idx * nsample + sample_idx;  // 输出位置
 
     out[out_idx] = features[in_idx];
 }

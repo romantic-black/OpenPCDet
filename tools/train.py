@@ -176,7 +176,7 @@ def main():
         model,
         optimizer,
         train_loader,
-        model_func=model_fn_decorator(),
+        model_func=model_fn_decorator(),        # 注意这里还用了下装饰器
         lr_scheduler=lr_scheduler,
         optim_cfg=cfg.OPTIMIZATION,
         start_epoch=start_epoch,

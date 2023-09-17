@@ -23,6 +23,8 @@ class KittiDataset(DatasetTemplate):
         super().__init__(
             dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
         )
+        # 传递参数是 训练集train 还是验证集val
+        # 注意配置中没有测试或训练的区分，所以会根据当前模式确定使用哪个数据集
         self.split = self.dataset_cfg.DATA_SPLIT[self.mode]
         self.root_split_path = self.root_path / ('training' if self.split != 'test' else 'testing')
 
@@ -369,8 +371,8 @@ class KittiDataset(DatasetTemplate):
         return len(self.kitti_infos)
 
     def __getitem__(self, index):
-        # index = 4
-        if self._merge_all_iters_to_one_epoch:
+
+        if self._merge_all_iters_to_one_epoch:  # False
             index = index % len(self.kitti_infos)
 
         info = copy.deepcopy(self.kitti_infos[index])
@@ -385,7 +387,7 @@ class KittiDataset(DatasetTemplate):
             'calib': calib,
         }
 
-        if 'annos' in info:
+        if 'annos' in info:     # True
             annos = info['annos']
             annos = common_utils.drop_info_with_name(annos, name='DontCare')
             loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
@@ -397,28 +399,29 @@ class KittiDataset(DatasetTemplate):
                 'gt_names': gt_names,
                 'gt_boxes': gt_boxes_lidar
             })
-            if "gt_boxes2d" in get_item_list:
+            if "gt_boxes2d" in get_item_list:   # False
                 input_dict['gt_boxes2d'] = annos["bbox"]
 
             road_plane = self.get_road_plane(sample_idx)
-            if road_plane is not None:
+            if road_plane is not None:          # True
                 input_dict['road_plane'] = road_plane
 
-        if "points" in get_item_list:
+        if "points" in get_item_list:   # True
             points = self.get_lidar(sample_idx)
-            if self.dataset_cfg.FOV_POINTS_ONLY:
+            # 才发现，KITTI数据集中只标注了前方视野内的点
+            if self.dataset_cfg.FOV_POINTS_ONLY:    # True
                 pts_rect = calib.lidar_to_rect(points[:, 0:3])
                 fov_flag = self.get_fov_flag(pts_rect, img_shape, calib)
                 points = points[fov_flag]
             input_dict['points'] = points
 
-        if "images" in get_item_list:
+        if "images" in get_item_list:  # False
             input_dict['images'] = self.get_image(sample_idx)
 
-        if "depth_maps" in get_item_list:
+        if "depth_maps" in get_item_list:  # False
             input_dict['depth_maps'] = self.get_depth_map(sample_idx)
 
-        if "calib_matricies" in get_item_list:
+        if "calib_matricies" in get_item_list:  # False
             input_dict["trans_lidar_to_cam"], input_dict["trans_cam_to_img"] = kitti_utils.calib_to_matricies(calib)
 
         input_dict['calib'] = calib
@@ -479,6 +482,6 @@ if __name__ == '__main__':
         create_kitti_infos(
             dataset_cfg=dataset_cfg,
             class_names=['Car', 'Pedestrian', 'Cyclist'],
-            data_path=ROOT_DIR / 'data' / 'kitti',
-            save_path=ROOT_DIR / 'data' / 'kitti'
+            data_path=Path("/mnt/e/DataSet/kitti/"),
+            save_path=Path("/mnt/e/DataSet/kitti/")
         )

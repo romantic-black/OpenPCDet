@@ -79,20 +79,20 @@ class VoxelQueryAndGrouping(nn.Module):
             'new_coords: %s, new_xyz_batch_cnt: %s' % (str(new_coords.shape), str(new_xyz_batch_cnt))
         batch_size = xyz_batch_cnt.shape[0]
         
-        # idx: (M1 + M2 ..., nsample), empty_ball_mask: (M1 + M2 ...)
+        # idx: (M1 + M2 ..., nsample),即16个点索引, empty_ball_mask: (M1 + M2 ...)
         idx1, empty_ball_mask1 = voxel_query(self.max_range, self.radius, self.nsample, xyz, new_xyz, new_coords, voxel2point_indices)
 
         idx1 = idx1.view(batch_size, -1, self.nsample)
         count = 0
         for bs_idx in range(batch_size):
-            idx1[bs_idx] -= count
-            count += xyz_batch_cnt[bs_idx]
+            idx1[bs_idx] -= count           # 说明 idx1 是稀疏张量 xyz 的做引
+            count += xyz_batch_cnt[bs_idx]  # 之前索引被拼起来，现在分开
         idx1 = idx1.view(-1, self.nsample)
         idx1[empty_ball_mask1] = 0
 
         idx = idx1
         empty_ball_mask = empty_ball_mask1
-        
+        # [M1+M2, 3, nsample], 汇集相邻体素坐标
         grouped_xyz = pointnet2_utils.grouping_operation(xyz, xyz_batch_cnt, idx, new_xyz_batch_cnt)
         # grouped_features: (M1 + M2, C, nsample)
         grouped_features = pointnet2_utils.grouping_operation(features, xyz_batch_cnt, idx, new_xyz_batch_cnt)  

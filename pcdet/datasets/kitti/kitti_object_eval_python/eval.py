@@ -665,12 +665,25 @@ def get_official_eval_result(gt_annos, dt_annos, current_classes, PR_detail_dict
     min_overlaps = min_overlaps[:, :, current_classes]
     result = ''
     # check whether alpha is valid
+    """
+    在计算机视觉和机器学习的对象检测任务中，alpha 通常是用来表示一个检测到的对象（例如，汽车、行人等）在三维空间中的方向或角度。
+    具体来说，它可能表示对象的偏航角（yaw angle）相对于某个参考方向（通常是相机或传感器方向）。
+    在一些应用场景，如自动驾驶，了解对象的方向不仅有助于识别对象，还有助于预测对象可能的移动轨迹，从而进行更准确的导航或决策。
+    在代码中，alpha 值可能有特定的约定或范围，比如它可能是一个在 −π 到 π 之间的角度值，或者用其他方式来量化。
+    有时，alpha 可能被设为一个占位符或无效值（如 -10），以表示该信息不可用或未被计算。
+    总体来说，alpha 是一个可选的但有用的信息，用于评估对象检测模型的性能，特别是当方向信息对任务有重要影响时。
+    在评估中，你可能会看到 AOS（Average Orientation Similarity，平均方向相似度）这样的指标，
+    它专门用于量化方向预测的准确性。
+    """
     compute_aos = False
     for anno in dt_annos:
         if anno['alpha'].shape[0] != 0:
             if anno['alpha'][0] != -10:
                 compute_aos = True
             break
+
+    # gt_annos: [num_example], dt_annos: [num_example]
+    # 检测出的物体数量很可能不同，同时gt中物体类别包含卡车等
     mAPbbox, mAPbev, mAP3d, mAPaos, mAPbbox_R40, mAPbev_R40, mAP3d_R40, mAPaos_R40 = do_eval(
         gt_annos, dt_annos, current_classes, min_overlaps, compute_aos, PR_detail_dict=PR_detail_dict)
 

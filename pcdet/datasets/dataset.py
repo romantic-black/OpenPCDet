@@ -24,6 +24,7 @@ class DatasetTemplate(torch_data.Dataset):
             return
 
         self.point_cloud_range = np.array(self.dataset_cfg.POINT_CLOUD_RANGE, dtype=np.float32)
+        # 从src_feature_list 中选取需要的特征 used_feature_list（如 x, y, z），重新构成 np 数组
         self.point_feature_encoder = PointFeatureEncoder(
             self.dataset_cfg.POINT_FEATURE_ENCODING,
             point_cloud_range=self.point_cloud_range
@@ -176,12 +177,15 @@ class DatasetTemplate(torch_data.Dataset):
                 voxel_num_points: optional (num_voxels)
                 ...
         """
-        if self.training:
+        if self.training:       # True
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
+            # 一组指示 gt_boxes 类别是否为需求类别的 flag
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
             
             if 'calib' in data_dict:
                 calib = data_dict['calib']
+
+            # 数据增强
             data_dict = self.data_augmentor.forward(
                 data_dict={
                     **data_dict,
@@ -190,11 +194,15 @@ class DatasetTemplate(torch_data.Dataset):
             )
             if 'calib' in data_dict:
                 data_dict['calib'] = calib
+        # 给出数据增强的变换矩阵，添加至 data_dict['lidar_aug_matrix']
         data_dict = self.set_lidar_aug_matrix(data_dict)
         if data_dict.get('gt_boxes', None) is not None:
+            # 删除未选中的标签
             selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
             data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
             data_dict['gt_names'] = data_dict['gt_names'][selected]
+
+            # 名称转换为索引
             gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
             gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
             data_dict['gt_boxes'] = gt_boxes
@@ -218,6 +226,9 @@ class DatasetTemplate(torch_data.Dataset):
         return data_dict
 
     @staticmethod
+    # 在DataLoader实例化时传入，自动调用
+    # batch_list: [batch_size]
+    # 这里应该改成调用每个字段的某方法？感觉那样更简单，不过无所谓了
     def collate_batch(batch_list, _unused=False):
         data_dict = defaultdict(list)
         for cur_sample in batch_list:

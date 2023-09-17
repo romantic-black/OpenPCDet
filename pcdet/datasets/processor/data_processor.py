@@ -139,23 +139,27 @@ class DataProcessor(object):
             # to avoid pickling issues in multiprocess spawn
             return partial(self.transform_points_to_voxels, config=config)
 
-        if self.voxel_generator is None:
+        if self.voxel_generator is None:    # True
+            # 调用 spconv 设计的稀疏 tensor 类，具体如何实现的不清楚
             self.voxel_generator = VoxelGeneratorWrapper(
                 vsize_xyz=config.VOXEL_SIZE,
                 coors_range_xyz=self.point_cloud_range,
-                num_point_features=self.num_point_features,
+                num_point_features=self.num_point_features,     # 4
                 max_num_points_per_voxel=config.MAX_POINTS_PER_VOXEL,
                 max_num_voxels=config.MAX_NUMBER_OF_VOXELS[self.mode],
             )
 
         points = data_dict['points']
+        # 生成体素
         voxel_output = self.voxel_generator.generate(points)
         voxels, coordinates, num_points = voxel_output
-
-        if not data_dict['use_lead_xyz']:
+        # voxel: [16000,5,4],     # 体素索引，体素内点索引（最多5个），点特征
+        # num_points: [16000,]    # 体术内点数量（最多5个）
+        # coordinates: [16000,3]  # 体素质心位置（排列似乎是zyx？）
+        if not data_dict['use_lead_xyz']:   # False
             voxels = voxels[..., 3:]  # remove xyz in voxels(N, 3)
 
-        if config.get('DOUBLE_FLIP', False):
+        if config.get('DOUBLE_FLIP', False):    # False
             voxels_list, voxel_coords_list, voxel_num_points_list = [voxels], [coordinates], [num_points]
             points_yflip, points_xflip, points_xyflip = self.double_flip(points)
             points_list = [points_yflip, points_xflip, points_xyflip]

@@ -248,6 +248,8 @@ class Detector3DTemplate(nn.Module):
                 final_labels = torch.cat(pred_labels, dim=0)
                 final_boxes = torch.cat(pred_boxes, dim=0)
             else:
+                # cls_preds: 变为最大类别概率
+                # label_preds: 指示类别索引
                 cls_preds, label_preds = torch.max(cls_preds, dim=-1)
                 if batch_dict.get('has_class_labels', False):
                     label_key = 'roi_labels' if 'roi_labels' in batch_dict else 'batch_pred_labels'
@@ -267,7 +269,7 @@ class Detector3DTemplate(nn.Module):
                 final_scores = selected_scores
                 final_labels = label_preds[selected]
                 final_boxes = box_preds[selected]
-                    
+            # 计算不同阈值下的roi，rcnn召回率（通过iou）
             recall_dict = self.generate_recall_record(
                 box_preds=final_boxes if 'rois' not in batch_dict else src_box_preds,
                 recall_dict=recall_dict, batch_index=index, data_dict=batch_dict,
@@ -297,6 +299,7 @@ class Detector3DTemplate(nn.Module):
                 recall_dict['roi_%s' % (str(cur_thresh))] = 0
                 recall_dict['rcnn_%s' % (str(cur_thresh))] = 0
 
+        # 确保不会对无效的gt_boxes进行计算
         cur_gt = gt_boxes
         k = cur_gt.__len__() - 1
         while k >= 0 and cur_gt[k].sum() == 0:

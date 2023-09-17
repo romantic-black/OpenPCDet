@@ -5,10 +5,15 @@ class AnchorGenerator(object):
     def __init__(self, anchor_range, anchor_generator_config):
         super().__init__()
         self.anchor_generator_cfg = anchor_generator_config
-        self.anchor_range = anchor_range
+        self.anchor_range = anchor_range    # [  0.  -40.   -3.   70.4  40.    1. ]
+        # 对应车辆，行人，自行车的anchor
+        # [[[3.9, 1.6, 1.56]], [[0.8, 0.6, 1.73]], [[1.76, 0.6, 1.73]]]
         self.anchor_sizes = [config['anchor_sizes'] for config in anchor_generator_config]
+        # [[0, 1.57], [0, 1.57], [0, 1.57]]
         self.anchor_rotations = [config['anchor_rotations'] for config in anchor_generator_config]
+        # [[-1.78], [-0.6], [-0.6]]
         self.anchor_heights = [config['anchor_bottom_heights'] for config in anchor_generator_config]
+        # [False, False, False]
         self.align_center = [config.get('align_center', False) for config in anchor_generator_config]
 
         assert len(self.anchor_sizes) == len(self.anchor_rotations) == len(self.anchor_heights)
@@ -22,7 +27,7 @@ class AnchorGenerator(object):
                 grid_sizes, self.anchor_sizes, self.anchor_rotations, self.anchor_heights, self.align_center):
 
             num_anchors_per_location.append(len(anchor_rotation) * len(anchor_size) * len(anchor_height))
-            if align_center:
+            if align_center:    # False
                 x_stride = (self.anchor_range[3] - self.anchor_range[0]) / grid_size[0]
                 y_stride = (self.anchor_range[4] - self.anchor_range[1]) / grid_size[1]
                 x_offset, y_offset = x_stride / 2, y_stride / 2
@@ -45,14 +50,17 @@ class AnchorGenerator(object):
             x_shifts, y_shifts, z_shifts = torch.meshgrid([
                 x_shifts, y_shifts, z_shifts
             ])  # [x_grid, y_grid, z_grid]
+            # 排列组合所有的anchor
             anchors = torch.stack((x_shifts, y_shifts, z_shifts), dim=-1)  # [x, y, z, 3]
             anchors = anchors[:, :, :, None, :].repeat(1, 1, 1, anchor_size.shape[0], 1)
             anchor_size = anchor_size.view(1, 1, 1, -1, 3).repeat([*anchors.shape[0:3], 1, 1])
             anchors = torch.cat((anchors, anchor_size), dim=-1)
             anchors = anchors[:, :, :, :, None, :].repeat(1, 1, 1, 1, num_anchor_rotation, 1)
             anchor_rotation = anchor_rotation.view(1, 1, 1, 1, -1, 1).repeat([*anchors.shape[0:3], num_anchor_size, 1, 1])
-            anchors = torch.cat((anchors, anchor_rotation), dim=-1)  # [x, y, z, num_size, num_rot, 7]
-
+            # [x, y, z, num_size, num_rot, bbox]
+            # [176, 200, 1, 1, 2, 7]
+            anchors = torch.cat((anchors, anchor_rotation), dim=-1)
+            # contiguous 使内存连续, permute 交换维度
             anchors = anchors.permute(2, 1, 0, 3, 4, 5).contiguous()
             #anchors = anchors.view(-1, anchors.shape[-1])
             anchors[..., 2] += anchors[..., 5] / 2  # shift to box centers
@@ -74,6 +82,6 @@ if __name__ == '__main__':
         anchor_range=[-75.2, -75.2, -2, 75.2, 75.2, 4],
         anchor_generator_config=config
     )
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
     A.generate_anchors([[188, 188]])

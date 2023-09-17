@@ -57,7 +57,7 @@ class GroupingOperation(Function):
         """
         Args:
             ctx:
-            features: (N1 + N2 ..., C) tensor of features to group
+            features: (N1 + N2 ..., C) tensor of features to group，实际上是 xyz
             features_batch_cnt: (batch_size) [N1 + N2 ...] tensor containing the indicies of features to group with
             idx: (M1 + M2 ..., nsample) tensor containing the indicies of features to group with
             idx_batch_cnt: (batch_size) [M1 + M2 ...] tensor containing the indicies of features to group with

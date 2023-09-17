@@ -71,25 +71,25 @@ class RoIHeadTemplate(nn.Module):
         roi_scores = batch_box_preds.new_zeros((batch_size, nms_config.NMS_POST_MAXSIZE))
         roi_labels = batch_box_preds.new_zeros((batch_size, nms_config.NMS_POST_MAXSIZE), dtype=torch.long)
 
-        for index in range(batch_size):
-            if batch_dict.get('batch_index', None) is not None:
+        for index in range(batch_size):     # 遍历 batch
+            if batch_dict.get('batch_index', None) is not None:     # False
                 assert batch_cls_preds.shape.__len__() == 2
                 batch_mask = (batch_dict['batch_index'] == index)
             else:
                 assert batch_dict['batch_cls_preds'].shape.__len__() == 3
                 batch_mask = index
-            box_preds = batch_box_preds[batch_mask]
-            cls_preds = batch_cls_preds[batch_mask]
-
+            box_preds = batch_box_preds[batch_mask]     # [70400, 7]
+            cls_preds = batch_cls_preds[batch_mask]     # [70400, 1] 第二维是类别，现在只有一个
+            # 都是[70400]，左: 最大值，右：最大值位置
             cur_roi_scores, cur_roi_labels = torch.max(cls_preds, dim=1)
 
-            if nms_config.MULTI_CLASSES_NMS:
+            if nms_config.MULTI_CLASSES_NMS:    # False
                 raise NotImplementedError
             else:
                 selected, selected_scores = class_agnostic_nms(
                     box_scores=cur_roi_scores, box_preds=box_preds, nms_config=nms_config
                 )
-
+            # len(selected) = 512, 即 NMS 选取的数量
             rois[index, :len(selected), :] = box_preds[selected]
             roi_scores[index, :len(selected)] = cur_roi_scores[selected]
             roi_labels[index, :len(selected)] = cur_roi_labels[selected]
@@ -102,18 +102,19 @@ class RoIHeadTemplate(nn.Module):
         return batch_dict
 
     def assign_targets(self, batch_dict):
+        # 输入 RoI, gt， 输出 gt_of_rois: RoI, gt 的相对关系，
         batch_size = batch_dict['batch_size']
-        with torch.no_grad():
+        with torch.no_grad():   # 获得 RoI 与 gt 的各项指标
             targets_dict = self.proposal_target_layer.forward(batch_dict)
 
         rois = targets_dict['rois']  # (B, N, 7 + C)
         gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + C + 1)
         targets_dict['gt_of_rois_src'] = gt_of_rois.clone().detach()
 
-        # canonical transformation
+        # canonical transformation（即从雷达坐标系变为局部坐标系)
         roi_center = rois[:, :, 0:3]
         roi_ry = rois[:, :, 6] % (2 * np.pi)
-        gt_of_rois[:, :, 0:3] = gt_of_rois[:, :, 0:3] - roi_center
+        gt_of_rois[:, :, 0:3] = gt_of_rois[:, :, 0:3] - roi_center  # 原点归零
         gt_of_rois[:, :, 6] = gt_of_rois[:, :, 6] - roi_ry
 
         # transfer LiDAR coords to local coords
@@ -201,7 +202,7 @@ class RoIHeadTemplate(nn.Module):
         loss_cfgs = self.model_cfg.LOSS_CONFIG
         rcnn_cls = forward_ret_dict['rcnn_cls']
         rcnn_cls_labels = forward_ret_dict['rcnn_cls_labels'].view(-1)
-        if loss_cfgs.CLS_LOSS == 'BinaryCrossEntropy':
+        if loss_cfgs.CLS_LOSS == 'BinaryCrossEntropy':      # True
             rcnn_cls_flat = rcnn_cls.view(-1)
             batch_loss_cls = F.binary_cross_entropy(torch.sigmoid(rcnn_cls_flat), rcnn_cls_labels.float(), reduction='none')
             cls_valid_mask = (rcnn_cls_labels >= 0).float()

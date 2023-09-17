@@ -73,6 +73,7 @@ class VoxelBackBone8x(nn.Module):
         self.model_cfg = model_cfg
         norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
 
+        # [1408,1600,40] -> [41, 1600, 1408]
         self.sparse_shape = grid_size[::-1] + [1, 0, 0]
 
         self.conv_input = spconv.SparseSequential(

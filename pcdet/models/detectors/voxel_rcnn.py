@@ -10,7 +10,7 @@ class VoxelRCNN(Detector3DTemplate):
         for cur_module in self.module_list:
             batch_dict = cur_module(batch_dict)
 
-        if self.training:
+        if self.training:       # True
             loss, tb_dict, disp_dict = self.get_training_loss()
 
             ret_dict = {
@@ -30,7 +30,7 @@ class VoxelRCNN(Detector3DTemplate):
 
         loss = loss + loss_rpn + loss_rcnn
         
-        if hasattr(self.backbone_3d, 'get_loss'):
+        if hasattr(self.backbone_3d, 'get_loss'):  # False
             loss_backbone3d, tb_dict = self.backbone_3d.get_loss(tb_dict)
             loss += loss_backbone3d
             

@@ -10,21 +10,21 @@ class BaseBEVBackbone(nn.Module):
 
         if self.model_cfg.get('LAYER_NUMS', None) is not None:
             assert len(self.model_cfg.LAYER_NUMS) == len(self.model_cfg.LAYER_STRIDES) == len(self.model_cfg.NUM_FILTERS)
-            layer_nums = self.model_cfg.LAYER_NUMS
-            layer_strides = self.model_cfg.LAYER_STRIDES
-            num_filters = self.model_cfg.NUM_FILTERS
+            layer_nums = self.model_cfg.LAYER_NUMS  # [5, 5]
+            layer_strides = self.model_cfg.LAYER_STRIDES  # [1, 2]
+            num_filters = self.model_cfg.NUM_FILTERS  # [128, 256]
         else:
             layer_nums = layer_strides = num_filters = []
 
         if self.model_cfg.get('UPSAMPLE_STRIDES', None) is not None:
             assert len(self.model_cfg.UPSAMPLE_STRIDES) == len(self.model_cfg.NUM_UPSAMPLE_FILTERS)
-            num_upsample_filters = self.model_cfg.NUM_UPSAMPLE_FILTERS
-            upsample_strides = self.model_cfg.UPSAMPLE_STRIDES
+            num_upsample_filters = self.model_cfg.NUM_UPSAMPLE_FILTERS  # [256, 256]
+            upsample_strides = self.model_cfg.UPSAMPLE_STRIDES  # [1, 2]
         else:
             upsample_strides = num_upsample_filters = []
 
-        num_levels = len(layer_nums)
-        c_in_list = [input_channels, *num_filters[:-1]]
+        num_levels = len(layer_nums)  # 2
+        c_in_list = [input_channels, *num_filters[:-1]]  # [256, 128]
         self.blocks = nn.ModuleList()
         self.deblocks = nn.ModuleList()
         for idx in range(num_levels):
@@ -68,7 +68,7 @@ class BaseBEVBackbone(nn.Module):
                         nn.ReLU()
                     ))
 
-        c_in = sum(num_upsample_filters)
+        c_in = sum(num_upsample_filters) # 512
         if len(upsample_strides) > num_levels:
             self.deblocks.append(nn.Sequential(
                 nn.ConvTranspose2d(c_in, c_in, upsample_strides[-1], stride=upsample_strides[-1], bias=False),
@@ -93,7 +93,7 @@ class BaseBEVBackbone(nn.Module):
             x = self.blocks[i](x)
 
             stride = int(spatial_features.shape[2] / x.shape[2])
-            ret_dict['spatial_features_%dx' % stride] = x
+            ret_dict['spatial_features_%dx' % stride] = x   # 似乎没有使用
             if len(self.deblocks) > 0:
                 ups.append(self.deblocks[i](x))
             else:

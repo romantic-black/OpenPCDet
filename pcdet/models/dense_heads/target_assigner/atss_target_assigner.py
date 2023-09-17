@@ -31,7 +31,7 @@ class ATSSTargetAssigner(object):
             batch_size = gt_boxes_with_classes.shape[0]
             gt_classes = gt_boxes_with_classes[:, :, -1]
             gt_boxes = gt_boxes_with_classes[:, :, :-1]
-            if use_multihead:
+            if use_multihead:   # False
                 anchors = anchors.permute(3, 4, 0, 1, 2, 5).contiguous().view(-1, anchors.shape[-1])
             else:
                 anchors = anchors.view(-1, anchors.shape[-1])
